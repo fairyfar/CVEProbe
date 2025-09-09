@@ -11,22 +11,51 @@ import copy
 import re
 
 CVE_DETAIL = "https://nvd.nist.gov/vuln/detail/"
+CPE_MATCH_RE = r"^cpe:2.3:.:%s:%s:"
 
-DIR_DATA = "data"
+DIR_DATA = "./data"
 DIR_CVE = "%s/cve" % (DIR_DATA)
 DIR_CPEMATCH = "%s/cpematch" % (DIR_DATA)
-CONFIG_FILE = "config/config.json"
-REPORT_DIR = "report"
-# Summary report
+CONFIG_FILE = "./config/config.json"
+REPORT_DIR = "./report"
+# Brief/Summary report
 REPORT_CVE = "%s/cve.csv" % (REPORT_DIR)
 # Detail report
 REPORT_CVE_DETAIL = "%s/cve_detail.csv" % (REPORT_DIR)
 
 def process_args():
+    """
+    Process options
+    """
+    global CONFIG_FILE
+    global DIR_DATA
+    global DIR_CVE
+    global DIR_CPEMATCH
+    global REPORT_DIR
+    global REPORT_CVE
+    global REPORT_CVE_DETAIL
+
     parser = argparse.ArgumentParser(description="The \"probe\" part of the CVEProbe project.")
     parser.add_argument("-c", "--config", type = str, default = "", \
-        help = "specified configuration file (default is %s)" % (CONFIG_FILE))
-    return parser.parse_args()
+        help = "configuration file (default is %s)" % (CONFIG_FILE))
+    parser.add_argument("-d", "--data", type = str, default = "", \
+        help = "data directory (default is %s)" % (DIR_DATA))
+    parser.add_argument("-r", "--report", type = str, default = "", \
+        help = "report directory (default is %s)" % (REPORT_DIR))
+
+    args = parser.parse_args()
+    if args.config != "":
+        CONFIG_FILE = args.config
+    if args.data != "":
+        DIR_DATA = args.data
+        DIR_CVE = "%s/cve" % (DIR_DATA)
+        DIR_CPEMATCH = "%s/cpematch" % (DIR_DATA)
+    if args.report != "":
+        REPORT_DIR = args.report
+        REPORT_CVE = "%s/cve.csv" % (REPORT_DIR)
+        REPORT_CVE_DETAIL = "%s/cve_detail.csv" % (REPORT_DIR)
+
+    return args
 
 def log_print(ptype, pmsg):
     """
@@ -142,12 +171,11 @@ def ver_matched(versions, cpematch):
 
     return ver_ls
 
-def load_config_file(config_fn):
+def load_config_file():
     """
     Load config list
     """
-    if config_fn == "":
-        config_fn = CONFIG_FILE
+    config_fn = CONFIG_FILE
     log_print("INFO", "Load " + config_fn)
     try:
         with codecs.open(config_fn, "r", encoding = "utf-8") as f:
@@ -209,41 +237,86 @@ def get_cve_description(cve):
             return desc["value"].replace("\"", "\"\"")
     return ""
 
+def get_cvss_rank(ver, cve):
+    """
+    Get CVSS rank
+    """
+    cvem = cve["metrics"]
+    if ver == "V2" and "cvssMetricV2" in cvem:
+        cvss = cvem["cvssMetricV2"][0]
+        return "%s" % str(cvss["cvssData"]["baseScore"]), cvss["baseSeverity"], cvss["cvssData"]["vectorString"]
+    elif ver == "V30" and "cvssMetricV30" in cvem:
+        cvss = cvem["cvssMetricV30"][0]
+        return "%s" % str(cvss["cvssData"]["baseScore"]), cvss["cvssData"]["baseSeverity"], cvss["cvssData"]["vectorString"]
+    elif ver == "V31" and "cvssMetricV31" in cvem:
+        cvss = cvem["cvssMetricV31"][0]
+        return "%s" % str(cvss["cvssData"]["baseScore"]), cvss["cvssData"]["baseSeverity"], cvss["cvssData"]["vectorString"]
+    elif ver == "V40" and "cvssMetricV40" in cvem:
+        cvss = cvem["cvssMetricV40"][0]
+        return "%s" % str(cvss["cvssData"]["baseScore"]), cvss["cvssData"]["baseSeverity"], cvss["cvssData"]["vectorString"]
+    else:
+        return "N/A", "N/A", "N/A"
+
+def str2date(date_str):
+    """
+    YYYY-MM-DDTHH:MM:SS.MMM --> YYYY-MM-DD
+    """
+    try:
+        date_obj = datetime.datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S.%f")
+        return date_obj.strftime("%Y-%m-%d")
+    except:
+        log_print("ERROR", "%s format failed" % date_str)
+        return ""
+
 def output_probe(fsum, fdet, vendor, product, versions, cve):
     """
     Output probe result
     """
     for ver in versions:
         sum_csv = "%s,%s,%s,%s,%s,%s%s" % ( \
-            vendor, product, ver, cve["id"], cve["vulnStatus"], CVE_DETAIL, cve["id"])
-        det_csv = "%s,\"%s\"\n" % (sum_csv, get_cve_description(cve))
+            vendor, product, ver[0], cve["id"], cve["vulnStatus"], CVE_DETAIL, cve["id"])
+
+        v2_score, v2_sev, v2_vect = get_cvss_rank("V2", cve)
+        v30_score, v30_sev, v30_vect = get_cvss_rank("V30", cve)
+        v31_score, v31_sev, v31_vect = get_cvss_rank("V31", cve)
+        v40_score, v40_sev, v40_vect = get_cvss_rank("V40", cve)
+        # There are 5 reserved fields
+        det_csv = "%s,\"%s\",%s,%s,%s,%s,\"%s\",%s,%s,\"%s\",%s,%s,\"%s\",%s,%s,\"%s\",,,,,,\"%s\"\n" % ( \
+            sum_csv, \
+            ver[1], \
+            str2date(cve["published"]), str2date(cve["lastModified"]), \
+            v2_score, v2_sev, v2_vect, v30_score, v30_sev, v30_vect, v31_score, v31_sev, v31_vect, v40_score, v40_sev, v40_vect, \
+            get_cve_description(cve))
 
         fsum.write(sum_csv)
         fsum.write("\n")
         fdet.write(det_csv)
+    return len(versions)
 
 def cve_probe(configs, fsum, fdet):
     """
     Probe CVE
     """
+    cve_cnt = 0
     # Traversal modules
     for modu in configs["modules"]:
         vendor = modu["vendor"].lower()
         product = modu["product"].lower()
         cves, cpematches = load_cve_cve(vendor, product)
+        modu_cve_cnt = 0
 
         if cves == None or cpematches == None:
             continue
         if len(cves["vulnerabilities"]) < 1:
-            log_print("WARN", "No CVE")
+            log_print("INFO", "No CVE")
             continue
         if len(cpematches["matchStrings"]) < 1:
-            log_print("WARN", "No CPEMatch")
+            log_print("INFO", "No CPEMatch")
             continue
 
         versions = modu["version"]
         # re string
-        re_str = r"^cpe:2.3:.:%s:%s:" % (r".*" if vendor == "" else vendor, product)
+        re_str = CPE_MATCH_RE % (r".*" if vendor == "" else vendor, product)
 
         # Traversal CVEs
         for cve in cves["vulnerabilities"]:
@@ -273,17 +346,23 @@ def cve_probe(configs, fsum, fdet):
                         if len(vers) == 0:
                             continue
                         verify_cves(vers, cvecve, valid_cves)
-                        output_probe(fsum, fdet, vendor, product, vers, cvecve)
+                        ret_cnt = output_probe(fsum, fdet, vendor, product, vers, cvecve)
+
+                        modu_cve_cnt += ret_cnt
+                        cve_cnt += ret_cnt
+        log_print("INFO", "%d CVE vulnerabilities" % modu_cve_cnt if modu_cve_cnt > 0 else "No CVE")
+
+    log_print("INFO", "There are %d CVE vulnerabilities" % cve_cnt)
 
 def probe_main():
     """
     Main for probe
     """
     args = process_args()
-    configs = load_config_file(args.config)
+    configs = load_config_file()
     log_print("INFO", configs["title"])
 
-    with codecs.open(REPORT_CVE, "w", encoding = "utf-8") as fsum, codecs.open(REPORT_CVE_DETAIL, "w", encoding = "utf-8") as fdet:
+    with codecs.open(REPORT_CVE, "w", encoding = "utf-8-sig") as fsum, codecs.open(REPORT_CVE_DETAIL, "w", encoding = "utf-8-sig") as fdet:
         cve_probe(configs, fsum, fdet)
 
 if __name__ == "__main__":

@@ -30,19 +30,49 @@ API_RETURN_OK = 200
 CVE_CPE_MATCH = "startIndex=%d&virtualMatchString=cpe:2.3:a:%s:%s:*:*:*:*:*:*:*:*"
 CPE_SEARCH = "startIndex=%d&matchStringSearch=cpe:2.3:*:%s:%s:*"
 
-CONFIG_FILE = "config/config.json"
-LOG_FILE = "extract.log"
-DIR_DATA = "data"
+CONFIG_FILE = "./config/config.json"
+LOG_FILE = "./extract.log"
+DIR_DATA = "./data"
 DIR_CVE = "%s/cve" % (DIR_DATA)
 DIR_CPEMATCH = "%s/cpematch" % (DIR_DATA)
 
 def process_args():
+    """
+    Process options
+    """
+    global CONFIG_FILE
+    global LOG_FILE
+    global DIR_DATA
+    global DIR_CVE
+    global DIR_CPEMATCH
+    global API_HEADERS
+    global API_SLEEP
+
     parser = argparse.ArgumentParser(description="The \"extract\" part of the CVEProbe project.")
+    parser.add_argument("-c", "--config", type = str, default = "", \
+        help = "configuration file (default is %s)" % (CONFIG_FILE))
+    parser.add_argument("-d", "--data", type = str, default = "", \
+        help = "data directory (default is %s)" % (DIR_DATA))
+    parser.add_argument("-l", "--log", type = str, default = "", \
+        help = "log file (default is %s)" % (LOG_FILE))
+    parser.add_argument("-k", "--apikey", type = str, default = "", \
+        help = "\"apiKey\" to pass to NVD API")
     parser.add_argument("-t", "--type", type = str, default = "", choices=["cve", "cpematch"], \
         help = "the type of data to be extracted")
-    parser.add_argument("-c", "--config", type = str, default = "", \
-        help = "specified configuration file (default is %s)" % (CONFIG_FILE))
-    return parser.parse_args()
+
+    args = parser.parse_args()
+    if args.config != "":
+        CONFIG_FILE = args.config
+    if args.data != "":
+        DIR_DATA = args.data
+        DIR_CVE = "%s/cve" % (DIR_DATA)
+        DIR_CPEMATCH = "%s/cpematch" % (DIR_DATA)
+    if args.log != "":
+        LOG_FILE = args.log
+    if args.apikey != "":
+        API_HEADERS["apiKey"] = args.apikey
+        API_SLEEP = 1
+    return args
 
 def python_major_ver():
     """
@@ -92,12 +122,11 @@ def make_get_request(req_type, params):
             response.close()
     return status, data
 
-def load_config_file(config_fn):
+def load_config_file():
     """
     Load config list
     """
-    if config_fn == "":
-        config_fn = CONFIG_FILE
+    config_fn = CONFIG_FILE
     log_print("INFO", "Load " + config_fn)
     try:
         with codecs.open(config_fn, "r", encoding = "utf-8") as f:
@@ -111,6 +140,7 @@ def extract_cve(configs):
     Extract CVE
     """
     log_print("INFO", "===== Extract CVE =====")
+    error_modules = 0
     for modu in configs["modules"]:
         # Always use lowercase
         vendor = modu["vendor"].lower()
@@ -123,6 +153,7 @@ def extract_cve(configs):
             # Extract CVE via vendor & product.
             req_status, res_str = make_get_request("cve", CVE_CPE_MATCH % (offset_idx, "*" if vendor == "" else vendor, product))
             if req_status != API_RETURN_OK:
+                error_modules += 1
                 log_print("ERROR", res_str)
                 break
             # To JSON
@@ -146,14 +177,17 @@ def extract_cve(configs):
                 # Write CVE file
                 fn = "%s/%s%s.json" % (DIR_CVE, "" if vendor == "" else vendor + "_", product)
                 with codecs.open(fn, "w", encoding = "utf-8") as f:
-                    json.dump({"vulnerabilities":res_ary}, f, indent=2)
+                    json.dump({"vulnerabilities":res_ary}, f, indent=2, ensure_ascii=False)
                 break
+
+    log_print("INFO", "Extract CVE finished. Total %d, Error %d." % (len(configs["modules"]), error_modules))
 
 def extract_cpematch(configs):
     """
     Extract CPEMatch
     """
     log_print("INFO", "===== Extract CPEMatch =====")
+    error_modules = 0
     for modu in configs["modules"]:
         # Always use lowercase
         vendor = modu["vendor"].lower()
@@ -167,6 +201,7 @@ def extract_cpematch(configs):
             req_status, res_str = make_get_request("cpematch", CPE_SEARCH % (offset_idx, "*" if vendor == "" else vendor, product))
             if req_status != API_RETURN_OK:
                 log_print("ERROR", res_str)
+                error_modules += 1
                 break
             # To JSON
             res_json = json.loads(res_str)
@@ -189,8 +224,10 @@ def extract_cpematch(configs):
                 # Write CPEMatch file
                 fn = "%s/%s%s.json" % (DIR_CPEMATCH, "" if vendor == "" else vendor + "_", product)
                 with codecs.open(fn, "w", encoding = "utf-8") as f:
-                    json.dump({"matchStrings":res_ary}, f, indent=2)
+                    json.dump({"matchStrings":res_ary}, f, indent=2, ensure_ascii=False)
                 break
+
+    log_print("INFO", "Extract CPEMatch finished. Total %d, Error %d." % (len(configs["modules"]), error_modules))
 
 def extract_main():
     """
@@ -198,7 +235,7 @@ def extract_main():
     """
     args = process_args()
     clear_log()
-    configs = load_config_file(args.config)
+    configs = load_config_file()
     log_print("INFO", configs["title"])
 
     if args.type == "" or args.type == "cve":
