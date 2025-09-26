@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 import argparse
@@ -25,7 +25,9 @@ CVD_API_URL = {
 API_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 # The NVD API has rate limitations
 API_SLEEP = 5
-API_RETURN_OK = 200
+API_GET_RETURN_OK = 200
+API_PUT_RETURN_OK = 200
+API_POST_RETURN_OK = 201
 
 CVE_CPE_MATCH = "startIndex=%d&virtualMatchString=cpe:2.3:a:%s:%s:*:*:*:*:*:*:*:*"
 CPE_SEARCH = "startIndex=%d&matchStringSearch=cpe:2.3:*:%s:%s:*"
@@ -97,15 +99,18 @@ def clear_log():
     with codecs.open(LOG_FILE, "w", encoding = "utf-8") as f:
         f.write("")
 
-def make_get_request(req_type, params):
+def make_get_request(req_type, params, data = None, method = "GET"):
     """
     API caller
     """
     try:
         response = None
         full_url = "%s?%s" % (CVD_API_URL[req_type], params)
-        req = Request(full_url, headers = API_HEADERS)
-        response = urlopen(req, timeout=10)
+        str_data = None if data == None else json.dumps(data).encode("utf-8")
+        req = Request(full_url, data = str_data, headers = API_HEADERS)
+        if method == "PUT":
+            req.get_method = lambda: "PUT"
+        response = urlopen(req, timeout = 10)
         status = response.code if python_major_ver() == 2 else response.status
         data = response.read().decode('utf-8')
     except HTTPError as e:
@@ -152,7 +157,7 @@ def extract_cve(configs):
             time.sleep(API_SLEEP)
             # Extract CVE via vendor & product.
             req_status, res_str = make_get_request("cve", CVE_CPE_MATCH % (offset_idx, "*" if vendor == "" else vendor, product))
-            if req_status != API_RETURN_OK:
+            if req_status != API_GET_RETURN_OK:
                 error_modules += 1
                 log_print("ERROR", res_str)
                 break
@@ -199,7 +204,7 @@ def extract_cpematch(configs):
             time.sleep(API_SLEEP)
             # Extract CPEMatch via vendor & product.
             req_status, res_str = make_get_request("cpematch", CPE_SEARCH % (offset_idx, "*" if vendor == "" else vendor, product))
-            if req_status != API_RETURN_OK:
+            if req_status != API_GET_RETURN_OK:
                 log_print("ERROR", res_str)
                 error_modules += 1
                 break
